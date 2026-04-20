@@ -13,9 +13,6 @@ Tests:     pytest tests/ -v
 """
 
 import os
-
-# Use a non-interactive matplotlib backend so plots save cleanly in CI
-# and on headless environments.
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -25,16 +22,13 @@ import pandas as pd
 from sklearn.calibration import CalibrationDisplay
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (PrecisionRecallDisplay, average_precision_score,
-                             classification_report, recall_score)
+from sklearn.metrics import (PrecisionRecallDisplay, average_precision_score,classification_report, recall_score)
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 
 
-NUMERIC_FEATURES = ["tenure", "monthly_charges", "total_charges",
-                    "num_support_calls", "senior_citizen",
-                    "has_partner", "has_dependents", "contract_months"]
+NUMERIC_FEATURES = ["tenure", "monthly_charges", "total_charges","num_support_calls", "senior_citizen","has_partner", "has_dependents", "contract_months"]
 
 
 def load_and_split(filepath="data/telecom_churn.csv", random_state=42):
@@ -279,7 +273,6 @@ def main():
     """Orchestrate all 7 lab tasks. Run with: python lab_trees.py"""
     os.makedirs("results", exist_ok=True)
 
-    # Task 1: Load + split
     result = load_and_split()
     if not result:
         print("load_and_split not implemented. Exiting.")
@@ -287,7 +280,6 @@ def main():
     X_train, X_test, y_train, y_test = result
     print(f"Train: {len(X_train)}  Test: {len(X_test)}  Churn rate: {y_train.mean():.2%}")
 
-    # Task 2: Decision tree + calibration comparison
     dt = build_decision_tree(X_train, y_train)
     if dt is not None:
         print(f"\n--- Decision Tree (max_depth=5) ---")
@@ -304,7 +296,6 @@ def main():
         print(f"DT ECE (max_depth=None): {cal['ece_unbounded']:.3f}")
         print(f"DT ECE (max_depth=5):    {cal['ece_depth_5']:.3f}")
 
-    # Task 3: Random forest + feature importances
     rf = build_random_forest(X_train, y_train)
     if rf is not None:
         print(f"\n--- Random Forest (max_depth=10) ---")
@@ -314,7 +305,6 @@ def main():
             for name, value in imp.items():
                 print(f"  {name:<22s} {value:.3f}")
 
-    # Task 4: Balanced RF + recall@0.5 comparison + PR-AUC
     rf_bal = build_random_forest(X_train, y_train, class_weight="balanced")
     if rf is not None and rf_bal is not None:
         r_def = evaluate_recall_at_threshold(rf, X_test, y_test, threshold=0.5)
@@ -325,17 +315,14 @@ def main():
 
         auc_def = compute_pr_auc(rf, X_test, y_test)
         auc_bal = compute_pr_auc(rf_bal, X_test, y_test)
-        print(f"\n--- PR-AUC (threshold-independent ranking quality) ---")
+
         print(f"  RF default:  {auc_def:.3f}")
         print(f"  RF balanced: {auc_bal:.3f}")
-        print("Note: class_weight='balanced' shifts the operating point at a fixed "
-              "threshold; it does not improve the underlying ranking (PR-AUC).")
 
-        # Task 5: PR curves + calibration curves
+
         plot_pr_curves(rf, rf_bal, X_test, y_test, "results/pr_curves.png")
         plot_calibration_curves(rf, rf_bal, X_test, y_test, "results/calibration_curves.png")
 
-    # Task 6: Tree-vs-linear disagreement
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
