@@ -7,7 +7,7 @@ operating-point tool at a fixed threshold), evaluate with PR-AUC and
 calibration, and demonstrate what tree models capture that linear models
 cannot.
 
-Complete the 11 functions below. See the lab guide for task-by-task detail.
+Complete the 12 functions below. See the lab guide for task-by-task detail.
 Run with:  python lab_trees.py
 Tests:     pytest tests/ -v
 """
