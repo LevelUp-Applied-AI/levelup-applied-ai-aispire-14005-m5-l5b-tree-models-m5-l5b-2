@@ -398,7 +398,83 @@ def find_tree_vs_linear_disagreement(rf_model, lr_model, X_test_raw,
         "true_label":     int(y_test.iloc[best_idx])
     }
 
+# ---------------------------------------------------------------------------
+# CHALLENGE TIER 1 — Threshold tuning
+# ---------------------------------------------------------------------------
 
+def threshold_sweep(rf_balanced, X_test, y_test,
+                    output_path="results/threshold_sweep.png"):
+    """Sweep thresholds from 0.1 to 0.9 and plot precision, recall, F1.
+
+    Args:
+        rf_balanced: Trained balanced RandomForestClassifier.
+        X_test: Test features.
+        y_test: True labels.
+        output_path: Where to save the plot.
+    """
+    from sklearn.metrics import precision_score, recall_score, f1_score
+
+    # Get churn probabilities from the balanced RF
+    y_prob = rf_balanced.predict_proba(X_test)[:, 1]
+
+    # All thresholds to try: 0.10, 0.15, 0.20, ..., 0.90
+    thresholds = np.arange(0.10, 0.91, 0.05)
+
+    precisions = []
+    recalls    = []
+    f1s        = []
+
+    for t in thresholds:
+        # Apply threshold — anyone above t is predicted as churn
+        y_pred = (y_prob >= t).astype(int)
+
+        precisions.append(precision_score(y_test, y_pred, zero_division=0))
+        recalls.append(   recall_score(   y_test, y_pred, zero_division=0))
+        f1s.append(       f1_score(       y_test, y_pred, zero_division=0))
+
+    # Find the threshold with the highest F1
+    best_f1_idx       = np.argmax(f1s)
+    best_f1_threshold = thresholds[best_f1_idx]
+
+    # Find the lowest threshold that achieves recall >= 0.80
+    recall_80_threshold = None
+    for t, r in zip(thresholds, recalls):
+        if r >= 0.80:
+            recall_80_threshold = t
+            break
+
+    # Plot all three metrics vs threshold
+    plt.figure(figsize=(10, 6))
+    plt.plot(thresholds, precisions, label='Precision', marker='o')
+    plt.plot(thresholds, recalls,    label='Recall',    marker='s')
+    plt.plot(thresholds, f1s,        label='F1',        marker='^')
+
+    # Vertical line for best F1
+    plt.axvline(best_f1_threshold, color='green', linestyle='--',
+                label=f'Best F1 @ threshold={best_f1_threshold:.2f}')
+
+    # Vertical line for recall >= 80%
+    if recall_80_threshold is not None:
+        plt.axvline(recall_80_threshold, color='red', linestyle='--',
+                    label=f'Recall>=80% @ threshold={recall_80_threshold:.2f}')
+
+    plt.xlabel('Threshold')
+    plt.ylabel('Score')
+    plt.title('Precision, Recall, and F1 vs Threshold (Balanced RF)')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(output_path)
+    plt.close()
+
+    # Print summary
+    print(f"\n--- Challenge Tier 1: Threshold Sweep ---")
+    print(f"  Best F1 threshold:       {best_f1_threshold:.2f}"
+          f"  (F1={f1s[best_f1_idx]:.3f})")
+    if recall_80_threshold is not None:
+        print(f"  Recall >= 80% threshold: {recall_80_threshold:.2f}")
+    else:
+        print(f"  Recall >= 80% not reached in range 0.1-0.9")
+    print(f"  Plot saved to {output_path}")
 # ---------------------------------------------------------------------------
 # MAIN — runs all 7 tasks end to end
 # ---------------------------------------------------------------------------
@@ -478,6 +554,9 @@ def main():
             print(f"  RF P(churn=1)={d['rf_proba']:.3f}  LR P(churn=1)={d['lr_proba']:.3f}")
             print(f"  |diff| = {d['prob_diff']:.3f}   true label = {d['true_label']}")
             print(f"  Feature values: {d['feature_values']}")
+
+ # Challenge Tier 1: Threshold sweep
+    threshold_sweep(rf_bal, X_test, y_test)
 
 
 if __name__ == "__main__":
