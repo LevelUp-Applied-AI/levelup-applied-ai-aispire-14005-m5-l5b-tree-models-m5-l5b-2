@@ -32,10 +32,16 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 
 
+# These are the columns we use as input features (X) for our models.
+# We only use numeric columns — the model can't handle text directly.
 NUMERIC_FEATURES = ["tenure", "monthly_charges", "total_charges",
                     "num_support_calls", "senior_citizen",
                     "has_partner", "has_dependents", "contract_months"]
 
+
+# ---------------------------------------------------------------------------
+# TASK 1 — Load and split
+# ---------------------------------------------------------------------------
 
 def load_and_split(filepath="data/telecom_churn.csv", random_state=42):
     """Load the Petra Telecom dataset and split 80/20 with stratification.
@@ -48,10 +54,31 @@ def load_and_split(filepath="data/telecom_churn.csv", random_state=42):
         Tuple (X_train, X_test, y_train, y_test) where X contains only
         NUMERIC_FEATURES and y is the `churned` column.
     """
-    # TODO: Load the CSV, select NUMERIC_FEATURES into X, use `churned` as y,
-    #       split with test_size=0.2 and stratify=y.
-    pass
+    # Read the CSV file into a pandas DataFrame (like opening an Excel sheet)
+    df = pd.read_csv(filepath)
 
+    # X = input features (the columns the model learns from)
+    X = df[NUMERIC_FEATURES]
+
+    # y = the target we want to predict (1 = churned, 0 = stayed)
+    y = df['churned']
+
+    # Split into 80% training and 20% test sets.
+    # stratify=y ensures both splits keep the same ~16% churn rate.
+    # random_state=42 makes the split reproducible every time we run this.
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y,
+        test_size=0.2,
+        stratify=y,
+        random_state=random_state
+    )
+
+    return (X_train, X_test, y_train, y_test)
+
+
+# ---------------------------------------------------------------------------
+# TASK 2 — Decision tree and calibration comparison
+# ---------------------------------------------------------------------------
 
 def build_decision_tree(X_train, y_train, max_depth=5, random_state=42):
     """Train a DecisionTreeClassifier.
@@ -63,8 +90,16 @@ def build_decision_tree(X_train, y_train, max_depth=5, random_state=42):
     Returns:
         Fitted DecisionTreeClassifier.
     """
-    # TODO: Fit a DecisionTreeClassifier with the given max_depth and seed.
-    pass
+    # Create the decision tree model with the given depth limit
+    model = DecisionTreeClassifier(
+        max_depth=max_depth,      # How many questions the tree can ask
+        random_state=random_state
+    )
+
+    # Train the model — it learns the decision rules from the training data
+    model.fit(X_train, y_train)
+
+    return model
 
 
 def compute_ece(y_true, y_prob, n_bins=10):
@@ -85,10 +120,39 @@ def compute_ece(y_true, y_prob, n_bins=10):
     Returns:
         ECE as a float in [0, 1].
     """
-    # TODO: Sort indices by y_prob ascending; use np.array_split to make
-    #       n_bins equal-size bins; for each bin compute
-    #       (bin_size / total) * abs(mean_prob - fraction_positive); sum.
-    pass
+    n = len(y_prob)
+
+    # Step 1: Get the sort order from lowest to highest predicted probability
+    order = np.argsort(y_prob)
+
+    # Reorder both arrays so they go from least to most confident prediction
+    y_prob = y_prob[order]
+    y_true = y_true.iloc[order] if hasattr(y_true, 'iloc') else y_true[order]
+
+    # Step 2: Split the sorted indices into n_bins equal-sized groups
+    # Each group contains customers with similar predicted probabilities
+    bins = np.array_split(np.arange(n), n_bins)
+
+    # Step 3: For each bin, measure how far off the model's confidence is
+    ece = 0.0
+    for bin_indices in bins:
+        if len(bin_indices) == 0:
+            continue
+
+        # What the model predicted on average for this group
+        mean_predicted = y_prob[bin_indices].mean()
+
+        # What actually happened in this group (true positive rate)
+        if hasattr(y_true, 'iloc'):
+            fraction_actual = y_true.iloc[bin_indices].mean()
+        else:
+            fraction_actual = y_true[bin_indices].mean()
+
+        # Weight this bin's error by how many samples it contains
+        weight = len(bin_indices) / n
+        ece += weight * abs(mean_predicted - fraction_actual)
+
+    return ece
 
 
 def compare_dt_calibration(X_train, X_test, y_train, y_test):
@@ -101,11 +165,27 @@ def compare_dt_calibration(X_train, X_test, y_train, y_test):
     Returns:
         Dict with keys 'ece_unbounded' and 'ece_depth_5' (floats in [0, 1]).
     """
-    # TODO: Fit a DecisionTreeClassifier with max_depth=None; compute ECE on
-    #       its test-set predict_proba. Fit another with max_depth=5; same.
-    #       Return both as a dict.
-    pass
+    # Train a tree with no depth limit — it will memorize the training data
+    dt_unbounded = build_decision_tree(X_train, y_train, max_depth=None)
 
+    # Train a tree limited to 5 levels — smoother, more honest probabilities
+    dt_depth5 = build_decision_tree(X_train, y_train, max_depth=5)
+
+    # Get predicted probabilities on the test set for each tree
+    # predict_proba returns [[P(stay), P(churn)], ...] — we take column 1
+    prob_unbounded = dt_unbounded.predict_proba(X_test)[:, 1]
+    prob_depth5 = dt_depth5.predict_proba(X_test)[:, 1]
+
+    # Compute ECE for both and return as a dictionary
+    return {
+        "ece_unbounded": compute_ece(y_test, prob_unbounded),
+        "ece_depth_5":   compute_ece(y_test, prob_depth5)
+    }
+
+
+# ---------------------------------------------------------------------------
+# TASK 3 — Random forest and feature importances
+# ---------------------------------------------------------------------------
 
 def build_random_forest(X_train, y_train, n_estimators=100, max_depth=10,
                         class_weight=None, random_state=42):
@@ -119,16 +199,36 @@ def build_random_forest(X_train, y_train, n_estimators=100, max_depth=10,
     Returns:
         Fitted RandomForestClassifier.
     """
-    # TODO: Fit a RandomForestClassifier with the given parameters.
-    pass
+    # A random forest trains many decision trees and combines their votes.
+    # n_estimators = number of trees in the forest
+    # max_depth = depth limit on each individual tree
+    # class_weight = how much to weight the minority class (churners)
+    model = RandomForestClassifier(
+        n_estimators=n_estimators,
+        max_depth=max_depth,
+        class_weight=class_weight,
+        random_state=random_state
+    )
+
+    model.fit(X_train, y_train)
+
+    return model
 
 
 def get_feature_importances(model, feature_names):
     """Return a dict of feature_name -> importance, sorted descending."""
-    # TODO: Zip feature_names with model.feature_importances_, sort by
-    #       importance descending, return as a regular dict.
-    pass
+    # Zip each feature name with its importance score from the trained model
+    pairs = zip(feature_names, model.feature_importances_)
 
+    # Sort by importance value (highest first)
+    sorted_pairs = sorted(pairs, key=lambda x: x[1], reverse=True)
+
+    return dict(sorted_pairs)
+
+
+# ---------------------------------------------------------------------------
+# TASK 4 — class_weight at the default 0.5 threshold
+# ---------------------------------------------------------------------------
 
 def evaluate_recall_at_threshold(model, X_test, y_test, threshold=0.5):
     """Recall for class 1 at a specified decision threshold.
@@ -140,9 +240,15 @@ def evaluate_recall_at_threshold(model, X_test, y_test, threshold=0.5):
     Returns:
         Recall as a float in [0, 1].
     """
-    # TODO: Get predict_proba(X_test)[:, 1], threshold it, compute
-    #       recall_score(y_test, y_pred, zero_division=0).
-    pass
+    # Get the probability of churn for each customer
+    y_prob = model.predict_proba(X_test)[:, 1]
+
+    # Convert probabilities to binary predictions using the given threshold
+    # Any probability >= threshold is predicted as churn (1)
+    y_pred = (y_prob >= threshold).astype(int)
+
+    # Recall = how many actual churners did we correctly identify?
+    return recall_score(y_test, y_pred, zero_division=0)
 
 
 def compute_pr_auc(model, X_test, y_test):
@@ -157,9 +263,16 @@ def compute_pr_auc(model, X_test, y_test):
     Returns:
         Float in [0, 1].
     """
-    # TODO: Get predict_proba(X_test)[:, 1] and call average_precision_score.
-    pass
+    # Get predicted probabilities for the churn class
+    y_prob = model.predict_proba(X_test)[:, 1]
 
+    # average_precision_score computes PR-AUC (area under precision-recall curve)
+    return average_precision_score(y_test, y_prob)
+
+
+# ---------------------------------------------------------------------------
+# TASK 5 — PR curves and calibration curves
+# ---------------------------------------------------------------------------
 
 def plot_pr_curves(rf_default, rf_balanced, X_test, y_test, output_path):
     """Plot PR curves for both RF models on the same axes and save as PNG.
@@ -167,18 +280,43 @@ def plot_pr_curves(rf_default, rf_balanced, X_test, y_test, output_path):
     Args:
         output_path: Destination path (e.g., 'results/pr_curves.png').
     """
-    # TODO: Create a matplotlib figure. Use PrecisionRecallDisplay.from_estimator
-    #       for each model on the same axes. Title the plot. Save to
-    #       output_path with plt.savefig. Close the figure.
-    pass
+    fig, ax = plt.subplots()
+
+    # Plot the default RF's precision-recall curve
+    PrecisionRecallDisplay.from_estimator(
+        rf_default, X_test, y_test, ax=ax, name="RF Default"
+    )
+
+    # Plot the balanced RF's curve on the same axes for comparison
+    PrecisionRecallDisplay.from_estimator(
+        rf_balanced, X_test, y_test, ax=ax, name="RF Balanced"
+    )
+
+    ax.set_title("Precision-Recall Curves")
+    plt.savefig(output_path)
+    plt.close()  # Free memory — always close after saving
 
 
 def plot_calibration_curves(rf_default, rf_balanced, X_test, y_test, output_path):
     """Plot calibration curves for both RF models and save as PNG."""
-    # TODO: Create a figure. Use CalibrationDisplay.from_estimator for each
-    #       model on the same axes. Save to output_path. Close the figure.
-    pass
+    fig, ax = plt.subplots()
 
+    # A well-calibrated model's curve lies close to the diagonal (perfect line)
+    CalibrationDisplay.from_estimator(
+        rf_default, X_test, y_test, ax=ax, n_bins=10, name="RF Default"
+    )
+    CalibrationDisplay.from_estimator(
+        rf_balanced, X_test, y_test, ax=ax, n_bins=10, name="RF Balanced"
+    )
+
+    ax.set_title("Calibration Curves")
+    plt.savefig(output_path)
+    plt.close()
+
+
+# ---------------------------------------------------------------------------
+# TASK 6 — Tree-vs-linear capability demonstration
+# ---------------------------------------------------------------------------
 
 def build_logistic_regression(X_train_scaled, y_train, random_state=42):
     """Train a LogisticRegression baseline on scaled features.
@@ -191,8 +329,11 @@ def build_logistic_regression(X_train_scaled, y_train, random_state=42):
     Returns:
         Fitted LogisticRegression(max_iter=1000).
     """
-    # TODO: Fit a LogisticRegression(max_iter=1000, random_state=random_state).
-    pass
+    # Logistic regression learns a weighted sum of features.
+    # max_iter=1000 gives the optimizer enough steps to converge.
+    model = LogisticRegression(max_iter=1000, random_state=random_state)
+    model.fit(X_train_scaled, y_train)
+    return model
 
 
 def find_tree_vs_linear_disagreement(rf_model, lr_model, X_test_raw,
@@ -225,12 +366,118 @@ def find_tree_vs_linear_disagreement(rf_model, lr_model, X_test_raw,
           - prob_diff (float): |rf_proba - lr_proba|
           - true_label (int): 0 or 1
     """
-    # TODO: Compute predict_proba(:, 1) for both models on their respective
-    #       X_test inputs. Take absolute difference. Find the sample index
-    #       with the MAXIMUM difference (must be >= min_diff). Return the
-    #       dict with all six fields populated.
-    pass
+    # Get churn probability from each model
+    rf_proba = rf_model.predict_proba(X_test_raw)[:, 1]
+    lr_proba = lr_model.predict_proba(X_test_scaled)[:, 1]
 
+    # Compute the absolute difference between the two models for every customer
+    diffs = np.abs(rf_proba - lr_proba)
+
+    # Find the customer where the two models disagree the most
+    best_idx = np.argmax(diffs)
+
+    # If even the biggest disagreement is smaller than min_diff, return None
+    if diffs[best_idx] < min_diff:
+        return None
+
+    # Get the actual DataFrame index (row label) for this customer
+    sample_idx = X_test_raw.index[best_idx]
+
+    # Build a dictionary of feature name → feature value for this customer
+    feature_values = {
+        name: X_test_raw.iloc[best_idx][name]
+        for name in feature_names
+    }
+
+    return {
+        "sample_idx":     sample_idx,
+        "feature_values": feature_values,
+        "rf_proba":       float(rf_proba[best_idx]),
+        "lr_proba":       float(lr_proba[best_idx]),
+        "prob_diff":      float(diffs[best_idx]),
+        "true_label":     int(y_test.iloc[best_idx])
+    }
+
+# ---------------------------------------------------------------------------
+# CHALLENGE TIER 1 — Threshold tuning
+# ---------------------------------------------------------------------------
+
+def threshold_sweep(rf_balanced, X_test, y_test,
+                    output_path="results/threshold_sweep.png"):
+    """Sweep thresholds from 0.1 to 0.9 and plot precision, recall, F1.
+
+    Args:
+        rf_balanced: Trained balanced RandomForestClassifier.
+        X_test: Test features.
+        y_test: True labels.
+        output_path: Where to save the plot.
+    """
+    from sklearn.metrics import precision_score, recall_score, f1_score
+
+    # Get churn probabilities from the balanced RF
+    y_prob = rf_balanced.predict_proba(X_test)[:, 1]
+
+    # All thresholds to try: 0.10, 0.15, 0.20, ..., 0.90
+    thresholds = np.arange(0.10, 0.91, 0.05)
+
+    precisions = []
+    recalls    = []
+    f1s        = []
+
+    for t in thresholds:
+        # Apply threshold — anyone above t is predicted as churn
+        y_pred = (y_prob >= t).astype(int)
+
+        precisions.append(precision_score(y_test, y_pred, zero_division=0))
+        recalls.append(   recall_score(   y_test, y_pred, zero_division=0))
+        f1s.append(       f1_score(       y_test, y_pred, zero_division=0))
+
+    # Find the threshold with the highest F1
+    best_f1_idx       = np.argmax(f1s)
+    best_f1_threshold = thresholds[best_f1_idx]
+
+    # Find the lowest threshold that achieves recall >= 0.80
+    recall_80_threshold = None
+    for t, r in zip(thresholds, recalls):
+        if r >= 0.80:
+            recall_80_threshold = t
+            break
+
+    # Plot all three metrics vs threshold
+    plt.figure(figsize=(10, 6))
+    plt.plot(thresholds, precisions, label='Precision', marker='o')
+    plt.plot(thresholds, recalls,    label='Recall',    marker='s')
+    plt.plot(thresholds, f1s,        label='F1',        marker='^')
+
+    # Vertical line for best F1
+    plt.axvline(best_f1_threshold, color='green', linestyle='--',
+                label=f'Best F1 @ threshold={best_f1_threshold:.2f}')
+
+    # Vertical line for recall >= 80%
+    if recall_80_threshold is not None:
+        plt.axvline(recall_80_threshold, color='red', linestyle='--',
+                    label=f'Recall>=80% @ threshold={recall_80_threshold:.2f}')
+
+    plt.xlabel('Threshold')
+    plt.ylabel('Score')
+    plt.title('Precision, Recall, and F1 vs Threshold (Balanced RF)')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(output_path)
+    plt.close()
+
+    # Print summary
+    print(f"\n--- Challenge Tier 1: Threshold Sweep ---")
+    print(f"  Best F1 threshold:       {best_f1_threshold:.2f}"
+          f"  (F1={f1s[best_f1_idx]:.3f})")
+    if recall_80_threshold is not None:
+        print(f"  Recall >= 80% threshold: {recall_80_threshold:.2f}")
+    else:
+        print(f"  Recall >= 80% not reached in range 0.1-0.9")
+    print(f"  Plot saved to {output_path}")
+# ---------------------------------------------------------------------------
+# MAIN — runs all 7 tasks end to end
+# ---------------------------------------------------------------------------
 
 def main():
     """Orchestrate all 7 lab tasks. Run with: python lab_trees.py"""
@@ -249,7 +496,6 @@ def main():
     if dt is not None:
         print(f"\n--- Decision Tree (max_depth=5) ---")
         print(classification_report(y_test, dt.predict(X_test), zero_division=0))
-        # Plot tree (first 3 levels)
         plt.figure(figsize=(14, 8))
         plot_tree(dt, feature_names=NUMERIC_FEATURES, max_depth=3,
                   filled=True, fontsize=8)
@@ -273,6 +519,8 @@ def main():
 
     # Task 4: Balanced RF + recall@0.5 comparison + PR-AUC
     rf_bal = build_random_forest(X_train, y_train, class_weight="balanced")
+    print("\n--- Random Forest BALANCED ---")
+    print(classification_report(y_test, rf_bal.predict(X_test), zero_division=0))
     if rf is not None and rf_bal is not None:
         r_def = evaluate_recall_at_threshold(rf, X_test, y_test, threshold=0.5)
         r_bal = evaluate_recall_at_threshold(rf_bal, X_test, y_test, threshold=0.5)
@@ -306,6 +554,9 @@ def main():
             print(f"  RF P(churn=1)={d['rf_proba']:.3f}  LR P(churn=1)={d['lr_proba']:.3f}")
             print(f"  |diff| = {d['prob_diff']:.3f}   true label = {d['true_label']}")
             print(f"  Feature values: {d['feature_values']}")
+
+ # Challenge Tier 1: Threshold sweep
+    threshold_sweep(rf_bal, X_test, y_test)
 
 
 if __name__ == "__main__":
